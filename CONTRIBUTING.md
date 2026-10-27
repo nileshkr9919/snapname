@@ -26,6 +26,8 @@ build/Snapname.app/Contents/MacOS/Snapname -folder ~/snapname-test
 | `Watcher.swift` | Watches the screenshot folder; finds where macOS saves screenshots |
 | `Namer.swift` | Prompt and request to the local Ollama vision model |
 | `Renamer.swift` | Screenshot detection, name cleanup, safe rename, Spotlight description |
+| `install.sh` | One-line installer: Ollama, the model, and the latest release (or a source build) |
+| `scripts/make-icon.swift` | Draws the app icon (`Resources/AppIcon.icns` and `icon.png`) |
 
 ### How a screenshot gets named
 1. The folder watcher fires; files that look like screenshots (default macOS/iOS name, or Spotlight's `kMDItemIsScreenCapture`) and lack the `local.snapname.original` attribute are queued.

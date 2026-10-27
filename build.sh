@@ -3,6 +3,13 @@
 #
 #   ./build.sh             build build/Snapname.app (ad-hoc signed)
 #   ./build.sh --install   also copy to ~/Applications and launch
+#   ./build.sh --dist      also produce a universal build/Snapname-<version>.zip
+#
+# Most people should run ./install.sh instead, which also installs Ollama and the model.
+#
+# For a public release, sign with your Developer ID and notarize:
+#   SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+#   NOTARY_PROFILE=snapname ./build.sh --dist
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -12,12 +19,18 @@ SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 BUNDLE_ID="${BUNDLE_ID:-local.snapname}"
 APP="build/Snapname.app"
 
-swift build -c release
-BIN="$(swift build -c release --show-bin-path)/Snapname"
+# Release zips are universal (Apple Silicon + Intel); local builds target this Mac only.
+ARCH_FLAGS=()
+[[ "${1:-}" == "--dist" || -n "${UNIVERSAL:-}" ]] && ARCH_FLAGS=(--arch arm64 --arch x86_64)
+swift build -c release "${ARCH_FLAGS[@]}"
+BIN="$(swift build -c release "${ARCH_FLAGS[@]}" --show-bin-path)/Snapname"
+
+[[ -f Resources/AppIcon.icns ]] || swift scripts/make-icon.swift Resources/AppIcon.icns
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Snapname"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -27,12 +40,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key><string>Snapname</string>
     <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
     <key>CFBundleExecutable</key><string>Snapname</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
     <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
     <key>LSUIElement</key><true/>
+    <key>NSHumanReadableCopyright</key><string>© $(date +%Y)</string>
     <key>NSDesktopFolderUsageDescription</key><string>Snapname renames the screenshots saved on your Desktop.</string>
     <key>NSDocumentsFolderUsageDescription</key><string>Snapname renames the screenshots saved in your Documents folder.</string>
     <key>NSDownloadsFolderUsageDescription</key><string>Snapname renames the screenshots saved in your Downloads folder.</string>
@@ -46,11 +61,34 @@ codesign --force --options runtime --timestamp=none \
 codesign --verify --strict "$APP"
 echo "Built $APP (version $VERSION, build $BUILD_NUMBER)"
 
-if [[ "${1:-}" == "--install" ]]; then
+case "${1:-}" in
+--install)
     pkill -x Snapname || true
     mkdir -p ~/Applications
     rm -rf ~/Applications/Snapname.app
     cp -R "$APP" ~/Applications/
     open ~/Applications/Snapname.app
     echo "Installed and launched ~/Applications/Snapname.app"
-fi
+    ;;
+--dist)
+    ZIP="build/Snapname-${VERSION}.zip"
+    rm -f "$ZIP"
+    if [[ "$SIGN_IDENTITY" != "-" ]]; then
+        # Re-sign with a secure timestamp, which notarization requires.
+        codesign --force --options runtime --timestamp \
+            --entitlements Resources/Snapname.entitlements \
+            --sign "$SIGN_IDENTITY" "$APP"
+    fi
+    ditto -c -k --keepParent "$APP" "$ZIP"
+    if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+        xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+        xcrun stapler staple "$APP"
+        rm -f "$ZIP"
+        ditto -c -k --keepParent "$APP" "$ZIP"
+        echo "Notarized and stapled."
+    elif [[ "$SIGN_IDENTITY" == "-" ]]; then
+        echo "Note: ad-hoc signed. Other Macs will block it unless signed with a Developer ID and notarized."
+    fi
+    echo "Created $ZIP"
+    ;;
+esac
